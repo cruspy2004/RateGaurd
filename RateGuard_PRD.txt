@@ -1,0 +1,202 @@
+================================================================
+RATEGAURD — PRODUCT REQUIREMENTS DOCUMENT (PRD)
+Distributed API Rate Limiting Service
+================================================================
+Author    : Muhammad Haadhee Sheeraz Mian — Reg No: 478359
+Course    : Parallel & Distributed Computing (PDC)
+Version   : 1.0
+Date      : May 2026
+================================================================
+
+
+1. PROBLEM STATEMENT
+---------------------
+Any developer running a public API faces the same problem: without
+rate limiting, a single bad actor (or a bug in a client) can spam
+thousands of requests per second, crash your server, inflate your
+costs, and deny service to legitimate users.
+
+The naive fix — count requests in memory on one server — breaks
+the moment you run more than one server. If a client sends 100
+requests spread across 3 nodes, each node sees 33 and thinks the
+limit isn't hit. The client gets through 300 requests when they
+should have been blocked at 100.
+
+RateGuard solves this. It is a standalone, distributed rate
+limiting service that any backend can call to check whether a
+request should be allowed or denied. Because all nodes share
+atomic counters in Redis, the limit is enforced correctly across
+the entire cluster — not per-node.
+
+
+2. WHAT IS RATEGAURD
+---------------------
+RateGuard is a self-hosted HTTP microservice. A developer runs it
+alongside their own backend. Before processing any request, their
+backend calls RateGuard with two pieces of information:
+
+    - WHO is making the request  (API key, user ID, or IP)
+    - WHAT rule applies          (which limit policy to enforce)
+
+RateGuard responds instantly:
+
+    - ALLOW  (request is within quota, counter incremented)
+    - DENY   (quota exceeded, retry after N seconds)
+
+That's the entire interface. One HTTP call. The developer's backend
+acts on the response. RateGuard handles all the distributed state,
+consistency, and fault tolerance internally.
+
+
+3. TARGET USERS
+----------------
+- Backend developers who run multi-node APIs
+- Solo developers who want abuse protection without building it
+- Students / hobbyists self-hosting APIs on cheap VPS setups
+
+
+4. USER STORIES
+----------------
+US-01  As a developer, I want to register a rate limit rule (e.g.
+       "100 requests per minute per API key") so I can enforce
+       quotas on my API users.
+
+US-02  As a developer, I want to check a request against a rule
+       and get an immediate ALLOW or DENY so my backend can act
+       on it without complex logic.
+
+US-03  As a developer, I want the rate limit to be enforced
+       consistently even when my backend runs on multiple servers,
+       so there are no quota bypasses.
+
+US-04  As a developer, I want to see a live dashboard showing
+       which clients are hitting limits, request volumes per rule,
+       and node health — so I have visibility into abuse patterns.
+
+US-05  As a developer, I want RateGuard to keep working even if
+       one of its nodes goes down, so my API stays protected
+       during partial outages.
+
+US-06  As a developer, I want to test RateGuard with a built-in
+       demo API, so I can see it blocking real requests without
+       needing to wire up my own backend first.
+
+
+5. FUNCTIONAL REQUIREMENTS
+---------------------------
+
+FR-01  Rule Management
+       POST /rules
+         - Create a named rate limit rule
+         - Parameters: name, limit (integer), window_seconds (integer),
+           strategy (fixed_window | sliding_window | token_bucket)
+         - Example: { "name": "free-tier", "limit": 100, "window": 60 }
+
+       GET /rules
+         - List all registered rules
+
+       DELETE /rules/:name
+         - Remove a rule
+
+FR-02  Rate Limit Check (Core Feature)
+       POST /check
+         - Body: { "key": "user-abc", "rule": "free-tier" }
+         - key   : any string identifying the requester (IP, user ID, API key)
+         - rule  : which limit policy to apply
+         - Response (ALLOW):
+             { "allowed": true, "remaining": 73, "reset_in": 41 }
+         - Response (DENY):
+             { "allowed": false, "remaining": 0, "retry_after": 41 }
+         - Latency target: < 10ms (Redis atomic ops, no DB round trip)
+
+FR-03  Three Rate Limiting Strategies
+       Fixed Window  : count resets every N seconds on the clock
+       Sliding Window: rolling N-second window per key (more accurate)
+       Token Bucket  : tokens refill at a steady rate, allows bursts
+
+FR-04  Live Dashboard (Web UI)
+       - Single-page dashboard auto-refreshing every 3 seconds
+       - Shows per-rule stats: total checks, allow rate, deny rate
+       - Shows top 10 most active keys (who is hitting limits most)
+       - Shows per-node request counts and health status
+       - Shows a real-time allow/deny event feed (last 50 events)
+
+FR-05  Built-in Demo API
+       - A simple mock API (GET /demo/data) protected by RateGuard
+       - Returns a fake JSON payload if allowed
+       - Returns 429 Too Many Requests if denied
+       - Lets anyone test RateGuard end-to-end without extra setup
+
+FR-06  Health & Metrics Endpoint
+       GET /health
+         - Returns node ID, uptime, Redis connection status
+       GET /metrics
+         - Returns Prometheus-compatible metrics for optional scraping
+
+FR-07  Fault Tolerance
+       - If one RateGuard node goes down, Nginx reroutes to others
+       - Counter state lives in Redis (shared, persistent), not in
+         any node's memory — node death loses nothing
+       - Redis uses append-only persistence (AOF) to survive restarts
+
+
+6. NON-FUNCTIONAL REQUIREMENTS
+--------------------------------
+NFR-01  /check response latency < 10ms at p95 under normal load
+NFR-02  /check response latency < 30ms at p95 under 1000 concurrent requests
+NFR-03  Zero quota bypass events: a client must never exceed their
+        limit across the cluster regardless of which node handles
+        each request
+NFR-04  System serves /check requests correctly during single-node failure
+NFR-05  All services start with: docker compose up --build
+NFR-06  Dashboard loads and auto-refreshes without any login
+
+
+7. DISTRIBUTED COMPUTING CONCEPTS — NATURAL FIT
+-------------------------------------------------
+Concept                 | Why It Arises Naturally In RateGuard
+------------------------|----------------------------------------------
+Concurrency             | Multiple nodes handle /check simultaneously;
+                        | without atomic Redis ops, race conditions
+                        | cause quota bypass — the core problem
+Mutual Exclusion        | Redis INCRBY + EXPIRE is an atomic distributed
+                        | operation; ensures counter increments never
+                        | race across nodes (no lost updates)
+Consistency             | All nodes must agree on the same counter value;
+                        | Redis single-writer model provides this
+Fault Tolerance         | Nginx health checks remove dead nodes; Redis AOF
+                        | ensures counters survive crashes
+Scalability             | Adding nodes increases /check throughput linearly;
+                        | Redis is the shared bottleneck, demonstrable
+Logical Clocks          | Event log uses Lamport timestamps to order
+                        | allow/deny events across nodes for the dashboard
+Global State Snapshot   | /metrics aggregates state across all nodes and
+                        | Redis to give a consistent system-wide view
+Election Algorithm      | Nodes elect a leader responsible for rule
+                        | synchronization and dashboard aggregation;
+                        | re-election triggers on leader failure
+Sliding Window          | Requires distributed sorted sets in Redis —
+                        | a genuine distributed data structure problem
+
+
+8. OUT OF SCOPE
+----------------
+- Authentication / API keys for RateGuard itself (assumed internal use)
+- Persistent storage of historical stats beyond Redis TTL
+- Cloud deployment
+- SDKs / client libraries (integration shown via curl / demo API only)
+
+
+9. SUCCESS CRITERIA FOR FINAL DEMO
+------------------------------------
+- Run demo API, hit it 110 times under a 100/min rule,
+  confirm requests 101-110 get 429 responses
+- docker stop one RateGuard node mid-load-test, confirm
+  zero quota bypasses and zero errors in k6 output
+- Show dashboard live-updating during a k6 run
+- Run identical k6 script against 1, 2, and 3 nodes —
+  show throughput scales, latency stays flat
+
+================================================================
+END OF PRD
+================================================================

@@ -1,0 +1,465 @@
+================================================================
+RATEGAURD — TECHNICAL DESIGN DOCUMENT
+Distributed API Rate Limiting Service
+================================================================
+Author    : Muhammad Haadhee Sheeraz Mian — Reg No: 478359
+Course    : Parallel & Distributed Computing (PDC)
+Version   : 1.0
+Date      : May 2026
+================================================================
+
+
+1. SYSTEM ARCHITECTURE
+-----------------------
+
+                         [ Developer's Backend ]
+                                  |
+                         POST /check (who + rule)
+                                  |
+                           [ Nginx :80 ]
+                        Load Balancer + Health Check
+                        /           |            \
+                 [Node-1]       [Node-2]       [Node-3]
+                 Express        Express        Express
+                 :3000          :3000          :3000
+                        \           |            /
+                         \          |           /
+                      [ Redis :6379 ]   [ PostgreSQL :5432 ]
+                      Rate counters      Rules + event log
+                      (atomic, shared)   (persistent)
+                               |
+                      [ Dashboard UI ]
+                      Served by any node
+                      Polls /metrics every 3s
+
+
+Data flow for POST /check:
+  1. Developer backend sends { key: "user-abc", rule: "free-tier" }
+  2. Nginx forwards to any available node (round-robin)
+  3. Node fetches rule config from local in-memory cache (rules rarely change)
+  4. Node executes atomic Redis script (EVALSHA) to increment counter
+  5. Redis returns { count, allowed, reset_in }
+  6. Node logs event to PostgreSQL with Lamport timestamp
+  7. Node returns allow/deny JSON to caller
+  Total: 1 Redis round trip + 1 async DB write (non-blocking)
+
+
+2. RATE LIMITING STRATEGIES — IMPLEMENTATION
+---------------------------------------------
+
+2.1 Fixed Window
+    - Redis key: rg:{rule}:{key}:{window_bucket}
+    - window_bucket = floor(unix_timestamp / window_seconds)
+    - On each /check:
+        INCR rg:free-tier:user-abc:27823
+        EXPIRE rg:free-tier:user-abc:27823 {window_seconds}
+    - If returned count > limit: DENY
+    - Problem: allows 2x burst at window boundary (known tradeoff)
+
+2.2 Sliding Window (primary strategy, most accurate)
+    - Redis key: rg:sliding:{rule}:{key}  (type: Sorted Set)
+    - Score = current unix timestamp in milliseconds
+    - On each /check (atomic Lua script via EVALSHA):
+        ZREMRANGEBYSCORE key 0 (now - window_ms)   -- remove old entries
+        count = ZCARD key
+        if count < limit:
+            ZADD key now now                        -- add current request
+            EXPIRE key window_seconds
+            return ALLOW, limit - count - 1
+        else:
+            return DENY, 0, ttl_of_oldest_entry
+    - Accurate to the millisecond, no boundary burst problem
+    - Slightly more memory per key than fixed window
+
+2.3 Token Bucket
+    - Redis key: rg:bucket:{rule}:{key}  (type: Hash)
+    - Fields: tokens (float), last_refill (timestamp)
+    - On each /check (atomic Lua script):
+        elapsed = now - last_refill
+        refill  = elapsed * (limit / window_seconds)
+        tokens  = min(limit, stored_tokens + refill)
+        if tokens >= 1:
+            tokens -= 1
+            HSET key tokens {tokens} last_refill {now}
+            return ALLOW
+        else:
+            return DENY, wait until next token
+    - Allows controlled bursting — good for bursty but bounded clients
+
+WHY ATOMIC LUA SCRIPTS (EVALSHA):
+    Redis is single-threaded. Lua scripts run atomically — no other
+    command executes between the read and write. This is the correct
+    distributed mutual exclusion primitive here. No locks needed, no
+    race conditions. Two nodes hitting Redis simultaneously for the
+    same key will be serialized by Redis, guaranteed.
+
+
+3. DISTRIBUTED COMPUTING CONCEPTS — IMPLEMENTATION DETAIL
+----------------------------------------------------------
+
+3.1 Mutual Exclusion via Redis Atomic Operations
+    Problem: Node A reads counter=99, Node B reads counter=99,
+             both increment to 100, both say ALLOW. Client bypassed limit.
+    Solution: The Lua script on Redis executes as an atomic transaction.
+             Redis processes it completely before any other command.
+             This is the distributed mutual exclusion guarantee — no
+             two nodes can interleave their read-modify-write on a key.
+    Demo: Run 200 concurrent requests under a limit of 100. Count
+          the exact number of ALLOWs. It must be exactly 100, not 101-110.
+
+3.2 Concurrency Across Nodes
+    All nodes are stateless. Any node can handle any /check request
+    because all counter state lives in Redis. Nginx distributes load
+    across nodes with round-robin. A client's requests can hit
+    Node 1, Node 3, Node 2 in sequence — the limit is still enforced
+    correctly because they all atomically increment the same Redis key.
+    Demo: k6 with 500 VUs, watch Nginx access logs show distribution.
+
+3.3 Fault Tolerance
+    Nginx config:
+      upstream rg_nodes {
+          server app:3000;
+          keepalive 32;
+      }
+      health_check interval=3s fails=2 passes=1 uri=/health;
+
+    On node failure:
+      - Nginx detects missed health checks within 6 seconds
+      - Removes node from pool, reroutes traffic automatically
+      - No counter state is lost (Redis holds everything)
+      - Recovering node rejoins pool when health checks pass
+
+    Redis persistence:
+      redis-server --appendonly yes --appendfsync everysec
+      Counters survive Redis restart (replayed from AOF log)
+
+    Demo: docker stop rategaurd-app-2 during k6 run.
+          k6 must show 0 errors. Quota bypass count must be 0.
+
+3.4 Lamport Logical Clock for Event Ordering
+    Each node maintains a Lamport counter in memory (starts at 0).
+    Every event (allow or deny decision) is stamped with the current
+    Lamport time before being logged to PostgreSQL.
+
+    class LamportClock {
+      constructor() { this.t = 0; }
+      tick()               { return ++this.t; }
+      update(received)     { this.t = Math.max(this.t, received) + 1;
+                             return this.t; }
+    }
+
+    When a node logs an event, it includes its Lamport timestamp.
+    The dashboard queries events ordered by lamport_ts for a globally
+    consistent event feed — even if wall-clock times drift between nodes.
+    This demonstrates exactly why Lamport clocks exist: wall clocks on
+    Docker containers can skew by milliseconds; logical ordering cannot.
+
+3.5 Leader Election (Bully Algorithm)
+    Purpose: One node aggregates /metrics from all nodes for the
+             dashboard. The leader also handles rule cache invalidation
+             (broadcasting rule changes to all nodes).
+
+    Algorithm:
+      - Each node gets a numeric ID from its Docker replica slot
+        (NODE_ID env var set via docker compose)
+      - On startup, each node sends a GET /election/ping to all
+        known node IDs (Node-1 pings Node-2 and Node-3, etc.)
+      - Highest responding ID wins and broadcasts
+        POST /election/leader { leader_id: N } to all nodes
+      - If leader stops responding to /health within 10 seconds,
+        the node with the next highest ID initiates re-election
+
+    This is a simplified Bully Algorithm. The coordinator role is
+    lightweight (just HTTP aggregation), so correctness matters
+    more than speed of election.
+
+3.6 Global State Snapshot for Dashboard
+    GET /metrics (any node, but leader preferred):
+      1. Leader queries each node's GET /node-stats (local counters)
+      2. Leader queries Redis INFO stats (hits, misses, memory)
+      3. Leader queries PostgreSQL for aggregated event counts
+      4. Assembles and returns consistent snapshot
+
+    This is a practical Chandy-Lamport style snapshot: we capture
+    global state consistently without pausing the system. We accept
+    that the snapshot is ~milliseconds stale (acceptable for a dashboard).
+
+
+4. POSTGRESQL SCHEMA
+---------------------
+
+Table: rules
+  id              SERIAL PRIMARY KEY
+  name            VARCHAR(100) UNIQUE NOT NULL
+  limit_count     INTEGER NOT NULL
+  window_seconds  INTEGER NOT NULL
+  strategy        VARCHAR(20) NOT NULL DEFAULT 'sliding'
+  created_at      TIMESTAMP DEFAULT NOW()
+
+Table: event_log
+  id              SERIAL PRIMARY KEY
+  node_id         VARCHAR(50) NOT NULL
+  rule_name       VARCHAR(100) NOT NULL
+  client_key      VARCHAR(255) NOT NULL
+  decision        VARCHAR(10) NOT NULL       -- 'allow' | 'deny'
+  remaining       INTEGER
+  lamport_ts      BIGINT NOT NULL
+  wall_ts         TIMESTAMP DEFAULT NOW()
+
+Indexes:
+  rules(name)                       -- rule lookup on every /check
+  event_log(rule_name, wall_ts)     -- dashboard queries
+  event_log(client_key, wall_ts)    -- top clients query
+  event_log(lamport_ts)             -- ordered event feed
+
+
+5. REDIS KEY SCHEMA
+--------------------
+
+Strategy       | Key Pattern                           | Type        | TTL
+---------------|---------------------------------------|-------------|----------
+Fixed Window   | rg:fw:{rule}:{key}:{bucket}           | String/Int  | window_s
+Sliding Window | rg:sw:{rule}:{key}                    | Sorted Set  | window_s
+Token Bucket   | rg:tb:{rule}:{key}                    | Hash        | 2*window
+Rule Cache     | rg:rule:{name}                        | Hash        | 60s
+Node Stats     | rg:stats:{node_id}:allows             | String/Int  | none
+Node Stats     | rg:stats:{node_id}:denies             | String/Int  | none
+Election       | rg:leader                             | String      | 15s
+
+
+6. API SPECIFICATION
+---------------------
+
+POST /check
+  Body    : { "key": "user-abc", "rule": "free-tier" }
+  200 OK  : { "allowed": true,  "remaining": 73, "reset_in": 41 }
+  200 OK  : { "allowed": false, "remaining": 0,  "retry_after": 41 }
+  400     : { "error": "rule 'free-tier' not found" }
+  Headers : X-Node-ID, X-Latency-Ms, X-Strategy
+
+POST /rules
+  Body    : { "name": "free-tier", "limit": 100, "window": 60, "strategy": "sliding" }
+  201     : { "rule": { ...created rule } }
+  409     : { "error": "rule already exists" }
+
+GET /rules
+  200     : { "rules": [ ...all rules ] }
+
+DELETE /rules/:name
+  204     : (no body)
+  404     : { "error": "rule not found" }
+
+GET /health
+  200     : { "node_id": "node-1", "status": "ok", "uptime_s": 3600,
+              "redis": "connected", "postgres": "connected" }
+
+GET /metrics
+  200     : {
+              "nodes": [ { "id": "node-1", "allows": 8432, "denies": 201 }, ... ],
+              "redis": { "hit_rate": "94%", "memory_mb": 12 },
+              "top_keys": [ { "key": "user-abc", "requests": 412 }, ... ],
+              "total_allows": 24103,
+              "total_denies": 891
+            }
+
+GET /demo/data
+  200     : { "data": "here is your fake API response", "timestamp": ... }
+  429     : { "error": "rate limit exceeded", "retry_after": 38 }
+  (this endpoint calls /check internally before responding)
+
+GET /dashboard
+  200     : serves static HTML dashboard page
+
+
+7. LUA SCRIPT — SLIDING WINDOW (CORE ALGORITHM)
+-------------------------------------------------
+
+-- Keys: KEYS[1] = sorted set key
+-- Args: ARGV[1] = now_ms, ARGV[2] = window_ms, ARGV[3] = limit,
+--       ARGV[4] = window_s (for EXPIRE)
+
+local key      = KEYS[1]
+local now      = tonumber(ARGV[1])
+local window   = tonumber(ARGV[2])
+local limit    = tonumber(ARGV[3])
+local expire   = tonumber(ARGV[4])
+
+-- Remove entries older than the window
+redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
+
+-- Count remaining entries in window
+local count = redis.call('ZCARD', key)
+
+if count < limit then
+    -- Add current request (score = member = timestamp for uniqueness)
+    redis.call('ZADD', key, now, now .. '-' .. math.random(1000000))
+    redis.call('EXPIRE', key, expire)
+    return { 1, limit - count - 1, 0 }   -- allowed, remaining, retry
+else
+    -- Get the oldest entry to calculate retry_after
+    local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+    local retry  = math.ceil((tonumber(oldest[2]) + window - now) / 1000)
+    return { 0, 0, retry }               -- denied, remaining, retry_after
+end
+
+
+8. DASHBOARD — WHAT IT SHOWS
+------------------------------
+
+Section 1 — System Health Bar (top of page)
+  Node-1 [GREEN]   Node-2 [GREEN]   Node-3 [RED - DOWN]
+  Redis: Connected | PostgreSQL: Connected | Leader: Node-1
+
+Section 2 — Live Stats (auto-refresh 3s)
+  Total Checks Today:  25,041
+  Allowed:             24,103  (96.3%)
+  Denied:               938    (3.7%)
+  Avg Latency:          6ms
+
+Section 3 — Per-Rule Breakdown (table)
+  Rule Name    | Limit    | Checks | Allows | Denies | Deny Rate
+  free-tier    | 100/min  | 18,402 | 17,801 | 601    | 3.3%
+  premium-tier | 1000/min | 6,639  | 6,302  | 337    | 5.1%
+
+Section 4 — Top 10 Most Active Keys (live bar chart)
+  user-abc      ||||||||||||||||  412 requests
+  192.168.1.55  ||||||||||||      318 requests
+  ...
+
+Section 5 — Live Event Feed (last 50 events, scrolling)
+  [14:23:01.412] ALLOW  user-abc     free-tier    remaining: 73  node-2
+  [14:23:01.398] DENY   user-xyz     free-tier    retry_after: 38s  node-1
+  [14:23:01.301] ALLOW  user-def     premium-tier remaining: 841 node-2
+  ...
+
+
+9. DOCKER COMPOSE STRUCTURE
+-----------------------------
+
+services:
+  nginx:
+    image: nginx:alpine
+    ports: ["80:80"]
+    volumes: [./nginx/nginx.conf:/etc/nginx/nginx.conf]
+    depends_on: [app]
+
+  app:
+    build: ./app
+    deploy:
+      replicas: 2          # scale with: docker compose up --scale app=3
+    environment:
+      NODE_ID:    "{{.Task.Slot}}"
+      REDIS_URL:  "redis://redis:6379"
+      DB_URL:     "postgres://rg:rg@postgres:5432/rategaurd"
+    depends_on: [redis, postgres]
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --appendfsync everysec
+    volumes: [redisdata:/data]
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB:       rategaurd
+      POSTGRES_USER:     rg
+      POSTGRES_PASSWORD: rg
+    volumes: [pgdata:/var/lib/postgresql/data, ./db/init.sql:/docker-entrypoint-initdb.d/init.sql]
+
+volumes:
+  redisdata:
+  pgdata:
+
+
+10. PROJECT FILE STRUCTURE
+---------------------------
+
+rategaurd/
+  docker-compose.yml
+  nginx/
+    nginx.conf
+  app/
+    Dockerfile
+    package.json
+    src/
+      index.js                  -- Express entry point, starts election
+      routes/
+        check.js                -- POST /check (core feature)
+        rules.js                -- POST/GET/DELETE /rules
+        metrics.js              -- GET /metrics, /health
+        demo.js                 -- GET /demo/data
+      services/
+        redis.js                -- Redis client + EVALSHA script loader
+        db.js                   -- PostgreSQL client + query helpers
+        strategies/
+          fixedWindow.js
+          slidingWindow.js      -- Lua script execution
+          tokenBucket.js
+        clock.js                -- Lamport clock implementation
+        election.js             -- Bully algorithm leader election
+        ruleCache.js            -- In-memory rule cache (60s TTL)
+      dashboard/
+        index.html              -- Single-page dashboard (vanilla JS)
+        dashboard.js            -- Polling + chart rendering (Chart.js)
+      scripts/
+        sliding_window.lua      -- Preloaded into Redis via SCRIPT LOAD
+        token_bucket.lua
+  db/
+    init.sql
+  tests/
+    unit/
+      clock.test.js
+      strategies.test.js
+    integration/
+      check.test.js
+      fault.test.js
+    load/
+      k6_check.js               -- 500 VUs hitting /check
+      k6_bypass_test.js         -- verifies exactly N allows under limit N
+  docs/
+    architecture.png
+    results/
+      load_test_1node.txt
+      load_test_2node.txt
+      load_test_3node.txt
+      fault_tolerance_test.txt
+
+
+11. TESTING PLAN
+-----------------
+
+Test 1 — Zero Bypass Test (most important)
+  Setup: rule { limit: 100, window: 60s, strategy: sliding }
+  k6 script: 200 VUs, all using same key "bypass-test", 10 seconds
+  Expected: exactly 100 ALLOW responses, rest DENY
+  Pass condition: allow_count == 100 (not 101, not 105)
+  This proves mutual exclusion works across nodes
+
+Test 2 — Latency Under Load
+  k6: 1000 VUs, 60 seconds, mixed keys
+  Measure: p50, p95, p99 latency on /check
+  Pass: p95 < 30ms
+
+Test 3 — Fault Tolerance
+  1. Start k6 (500 VUs, 120 seconds)
+  2. At t=30s: docker stop rategaurd-app-2
+  3. Monitor k6 error rate (must stay 0%)
+  4. Monitor allow count — must not spike (no bypass during failover)
+  5. At t=90s: docker start rategaurd-app-2
+  6. Confirm node rejoins
+
+Test 4 — Scalability
+  Run bypass test (limit 1000, 1500 VUs) against 1, 2, 3 nodes
+  Record: requests/sec handled, p95 latency
+  Plot results in final report
+
+Test 5 — Leader Election
+  1. Identify current leader (GET /metrics shows leader_id)
+  2. docker stop that node
+  3. Wait 15 seconds
+  4. Confirm new leader elected (GET /metrics on another node)
+  5. Confirm dashboard still updates correctly
+
+================================================================
+END OF DESIGN DOCUMENT
+================================================================

@@ -1,0 +1,40 @@
+services:
+  nginx:
+    image: nginx:alpine
+    ports: ["80:80"]
+    volumes: 
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+    depends_on: 
+      - app
+
+  app:
+    build: ./app
+    deploy:
+      replicas: 2
+    environment:
+      NODE_ID: "{{.Task.Slot}}"
+      REDIS_URL: "redis://redis:6379"
+      DB_URL: "postgres://rg:rg@postgres:5432/rategaurd"
+    depends_on: 
+      - redis
+      - postgres
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --appendfsync everysec
+    volumes: 
+      - redisdata:/data
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: rategaurd
+      POSTGRES_USER: rg
+      POSTGRES_PASSWORD: rg
+    volumes: 
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+volumes:
+  redisdata:
+  pgdata:
