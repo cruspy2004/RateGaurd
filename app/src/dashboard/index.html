@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>RateGuard Dashboard</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background: #f4f4f4; }
+        .card { background: white; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .row { display: flex; gap: 20px; }
+        .col { flex: 1; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+        .allow { color: green; font-weight: bold; }
+        .deny { color: red; font-weight: bold; }
+        .node-up { color: green; }
+        .node-down { color: red; }
+    </style>
+</head>
+<body>
+    <h1>RateGuard Dashboard</h1>
+    
+    <div class="row">
+        <div class="col card" id="health-card">
+            <h3>System Health</h3>
+            <div id="nodes-container"></div>
+            <p>Leader: <span id="leader-id">-</span></p>
+        </div>
+        <div class="col card">
+            <h3>Global Stats</h3>
+            <p>Total Allows: <span id="total-allows">0</span></p>
+            <p>Total Denies: <span id="total-denies">0</span></p>
+            <p>Deny Rate: <span id="deny-rate">0</span>%</p>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col card">
+            <h3>Top 10 Keys (Last Hour)</h3>
+            <table>
+                <thead><tr><th>Key</th><th>Requests</th></tr></thead>
+                <tbody id="top-keys-body"></tbody>
+            </table>
+        </div>
+        <div class="col card">
+            <h3>Rules Breakdown</h3>
+            <table>
+                <thead><tr><th>Rule</th><th>Checks</th><th>Allows</th><th>Denies</th></tr></thead>
+                <tbody id="rules-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Live Event Feed (Last 50)</h3>
+        <table>
+            <thead><tr><th>Time</th><th>Lamport TS</th><th>Decision</th><th>Rule</th><th>Key</th><th>Node</th></tr></thead>
+            <tbody id="events-body"></tbody>
+        </table>
+    </div>
+
+    <script>
+        async function fetchMetrics() {
+            try {
+                const res = await fetch('/metrics');
+                const data = await res.json();
+                
+                document.getElementById('leader-id').innerText = data.leader_id || '-';
+                document.getElementById('nodes-container').innerHTML = data.nodes.map(n => 
+                    `<span>Node ${n.id}: <span class="node-up">UP</span> (A:${n.allows} D:${n.denies})</span><br>`
+                ).join('');
+
+                const total = parseInt(data.total_allows) + parseInt(data.total_denies);
+                document.getElementById('total-allows').innerText = data.total_allows;
+                document.getElementById('total-denies').innerText = data.total_denies;
+                document.getElementById('deny-rate').innerText = total > 0 ? ((data.total_denies / total) * 100).toFixed(2) : '0';
+
+                document.getElementById('top-keys-body').innerHTML = data.top_keys.map(k => 
+                    `<tr><td>${k.key}</td><td>${k.requests}</td></tr>`
+                ).join('');
+
+                document.getElementById('rules-body').innerHTML = data.rules.map(r => 
+                    `<tr><td>${r.rule_name}</td><td>${r.checks}</td><td>${r.allows}</td><td>${r.denies}</td></tr>`
+                ).join('');
+
+                document.getElementById('events-body').innerHTML = data.events.map(e => 
+                    `<tr>
+                        <td>${new Date(e.wall_ts).toLocaleTimeString()}</td>
+                        <td>${e.lamport_ts}</td>
+                        <td class="${e.decision === 'allow' ? 'allow' : 'deny'}">${e.decision.toUpperCase()}</td>
+                        <td>${e.rule_name}</td>
+                        <td>${e.client_key}</td>
+                        <td>${e.node_id}</td>
+                    </tr>`
+                ).join('');
+
+            } catch (e) {
+                console.error('Failed to fetch metrics', e);
+            }
+        }
+
+        fetchMetrics();
+        setInterval(fetchMetrics, 3000);
+    </script>
+</body>
+</html>
