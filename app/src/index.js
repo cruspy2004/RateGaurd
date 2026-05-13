@@ -1,19 +1,20 @@
 const express = require('express');
 const { startElection } = require('./services/election');
 
-// We will add routes here as we build them
-// const checkRoute = require('./routes/check');
-// const rulesRoute = require('./routes/rules');
-// const metricsRoute = require('./routes/metrics');
-// const demoRoute = require('./routes/demo');
+const checkRoute = require('./routes/check');
+const rulesRoute = require('./routes/rules');
+const metricsRoute = require('./routes/metrics');
+const demoRoute = require('./routes/demo');
+const dashboardRoute = require('./routes/dashboard');
 
 const app = express();
 app.use(express.json());
 
-// app.use('/check', checkRoute);
-// app.use('/rules', rulesRoute);
-// app.use('/', metricsRoute);
-// app.use('/demo', demoRoute);
+app.use('/check', checkRoute);
+app.use('/rules', rulesRoute);
+app.use('/', metricsRoute);
+app.use('/demo', demoRoute);
+app.use('/', dashboardRoute);
 
 const PORT = 3000;
 app.listen(PORT, () => {
