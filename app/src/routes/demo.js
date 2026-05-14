@@ -1,13 +1,25 @@
 const express = require('express');
 const router = express.Router();
-const slidingWindow = require('../services/strategies/slidingWindow');
 
 router.get('/data', async (req, res) => {
-    const rule = { name: 'demo-rule', limit_count: 100, window_seconds: 60, strategy: 'sliding' };
-    const key = req.ip || 'demo-user';
+    // We use a fixed key for the demo so it's easy to see it hit the limit
+    const key = 'demo-user';
     
     try {
-        const result = await slidingWindow.check(rule, key);
+        // Call the internal check endpoint to ensure it logs to DB and updates stats
+        const checkRes = await fetch('http://localhost:3000/check', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: key, rule: 'demo-rule' })
+        });
+        
+        if (!checkRes.ok) {
+            // If the rule wasn't found (e.g. 400 Bad Request), just pass the error
+            const err = await checkRes.json();
+            return res.status(checkRes.status).json(err);
+        }
+        
+        const result = await checkRes.json();
         
         if (result.allowed) {
             res.json({ data: "here is your fake API response", timestamp: Date.now() });

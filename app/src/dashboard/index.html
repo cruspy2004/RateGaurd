@@ -1,94 +1,265 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RateGuard Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: sans-serif; margin: 20px; background: #f4f4f4; }
-        .card { background: white; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .row { display: flex; gap: 20px; }
-        .col { flex: 1; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
-        .allow { color: green; font-weight: bold; }
-        .deny { color: red; font-weight: bold; }
-        .node-up { color: green; }
-        .node-down { color: red; }
+        :root {
+            --bg: #0f172a;
+            --surface: rgba(30, 41, 59, 0.7);
+            --surface-border: rgba(255, 255, 255, 0.1);
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent: #3b82f6;
+            --success: #10b981;
+            --danger: #ef4444;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0f172a, #1e1b4b);
+            color: var(--text);
+            margin: 0;
+            padding: 40px 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 40px;
+            animation: fadeInDown 0.8s ease-out;
+        }
+
+        h1 {
+            font-weight: 800;
+            font-size: 2.5rem;
+            background: linear-gradient(to right, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin: 0;
+        }
+
+        .glass-card {
+            background: var(--surface);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--surface-border);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .glass-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7);
+        }
+
+        .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; margin-bottom: 24px; }
+        .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 24px; margin-bottom: 24px; }
+
+        .stat-value {
+            font-size: 3rem;
+            font-weight: 800;
+            margin: 10px 0;
+        }
+
+        .stat-label {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .node-up { color: var(--success); font-weight: bold; }
+        .node-down { color: var(--danger); font-weight: bold; }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid var(--surface-border); }
+        th { color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase; }
+        tbody tr { transition: background 0.2s; }
+        tbody tr:hover { background: rgba(255,255,255,0.05); }
+
+        .tag-allow { background: rgba(16, 185, 129, 0.2); color: var(--success); padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
+        .tag-deny { background: rgba(239, 68, 68, 0.2); color: var(--danger); padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
+
+        .simulator-box {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(139, 92, 246, 0.2));
+            text-align: center;
+        }
+
+        button.btn-primary {
+            background: linear-gradient(to right, #3b82f6, #8b5cf6);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 1rem;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
+            transition: all 0.2s ease;
+        }
+
+        button.btn-primary:hover {
+            transform: scale(1.05);
+            box-shadow: 0 6px 20px rgba(59, 130, 246, 0.6);
+        }
+
+        #simulator-result {
+            margin-top: 15px;
+            font-family: monospace;
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 6px;
+            min-height: 40px;
+        }
+
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .animate-up { animation: fadeInUp 0.8s ease-out forwards; opacity: 0; }
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
     </style>
 </head>
 <body>
-    <h1>RateGuard Dashboard</h1>
-    
-    <div class="row">
-        <div class="col card" id="health-card">
-            <h3>System Health</h3>
-            <div id="nodes-container"></div>
-            <p>Leader: <span id="leader-id">-</span></p>
-        </div>
-        <div class="col card">
-            <h3>Global Stats</h3>
-            <p>Total Allows: <span id="total-allows">0</span></p>
-            <p>Total Denies: <span id="total-denies">0</span></p>
-            <p>Deny Rate: <span id="deny-rate">0</span>%</p>
-        </div>
-    </div>
+    <div class="container">
+        <header>
+            <h1>RateGuard</h1>
+            <div style="text-align: right;">
+                <div class="stat-label">Leader Node</div>
+                <div id="leader-id" style="font-weight: bold; color: var(--accent);">Connecting...</div>
+            </div>
+        </header>
 
-    <div class="row">
-        <div class="col card">
-            <h3>Top 10 Keys (Last Hour)</h3>
+        <div class="grid-3">
+            <div class="glass-card animate-up" style="animation-delay: 0.1s;">
+                <div class="stat-label">Total Allowed</div>
+                <div class="stat-value" id="total-allows" style="color: var(--success);">0</div>
+            </div>
+            <div class="glass-card animate-up" style="animation-delay: 0.2s;">
+                <div class="stat-label">Total Denied</div>
+                <div class="stat-value" id="total-denies" style="color: var(--danger);">0</div>
+            </div>
+            <div class="glass-card animate-up" style="animation-delay: 0.3s;">
+                <div class="stat-label">Deny Rate</div>
+                <div class="stat-value" id="deny-rate">0.0%</div>
+            </div>
+        </div>
+
+        <div class="grid-2">
+            <div class="glass-card animate-up" style="animation-delay: 0.4s;">
+                <div class="stat-label" style="margin-bottom: 15px;">Traffic Overview (Allow vs Deny)</div>
+                <canvas id="trafficChart" height="200"></canvas>
+            </div>
+            
+            <div class="glass-card simulator-box animate-up" style="animation-delay: 0.5s;">
+                <div class="stat-label" style="margin-bottom: 15px; color: white;">API Simulator</div>
+                <p style="color: rgba(255,255,255,0.8); margin-bottom: 20px; font-size: 0.9rem;">
+                    Click to simulate a client hitting the `demo-rule` API rule (10 req/min). Spam it to see the rate limiter kick in!
+                </p>
+                <button class="btn-primary" onclick="simulateRequest()">Send API Request</button>
+                <div id="simulator-result">Awaiting input...</div>
+            </div>
+        </div>
+
+        <div class="grid-2">
+            <div class="glass-card animate-up" style="animation-delay: 0.6s;">
+                <div class="stat-label">System Health (Nodes)</div>
+                <div id="nodes-container" style="margin-top: 15px; line-height: 1.8;"></div>
+            </div>
+            <div class="glass-card animate-up" style="animation-delay: 0.7s;">
+                <div class="stat-label">Top 10 Active Keys</div>
+                <table>
+                    <thead><tr><th>Client Key</th><th>Requests</th></tr></thead>
+                    <tbody id="top-keys-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="glass-card animate-up" style="animation-delay: 0.8s;">
+            <div class="stat-label">Live Event Feed (Last 10)</div>
             <table>
-                <thead><tr><th>Key</th><th>Requests</th></tr></thead>
-                <tbody id="top-keys-body"></tbody>
+                <thead><tr><th>Time</th><th>Decision</th><th>Rule</th><th>Key</th><th>Node</th></tr></thead>
+                <tbody id="events-body"></tbody>
             </table>
         </div>
-        <div class="col card">
-            <h3>Rules Breakdown</h3>
-            <table>
-                <thead><tr><th>Rule</th><th>Checks</th><th>Allows</th><th>Denies</th></tr></thead>
-                <tbody id="rules-body"></tbody>
-            </table>
-        </div>
-    </div>
-
-    <div class="card">
-        <h3>Live Event Feed (Last 50)</h3>
-        <table>
-            <thead><tr><th>Time</th><th>Lamport TS</th><th>Decision</th><th>Rule</th><th>Key</th><th>Node</th></tr></thead>
-            <tbody id="events-body"></tbody>
-        </table>
     </div>
 
     <script>
+        let chartInstance = null;
+
+        function initChart() {
+            const ctx = document.getElementById('trafficChart').getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Allowed', 'Denied'],
+                    datasets: [{
+                        data: [1, 0],
+                        backgroundColor: ['#10b981', '#ef4444'],
+                        borderWidth: 0,
+                        hoverOffset: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'bottom', labels: { color: '#f8fafc' } } },
+                    cutout: '70%'
+                }
+            });
+        }
+
         async function fetchMetrics() {
             try {
                 const res = await fetch('/metrics');
                 const data = await res.json();
                 
-                document.getElementById('leader-id').innerText = data.leader_id || '-';
+                document.getElementById('leader-id').innerText = data.leader_id || 'Unknown';
                 document.getElementById('nodes-container').innerHTML = data.nodes.map(n => 
-                    `<span>Node ${n.id}: <span class="node-up">UP</span> (A:${n.allows} D:${n.denies})</span><br>`
+                    `<div>Node ${n.id}: <span class="node-up">UP</span> <span style="color:#94a3b8; font-size:0.85rem; margin-left:10px;">(Allowed: ${n.allows} | Denied: ${n.denies})</span></div>`
                 ).join('');
 
-                const total = parseInt(data.total_allows) + parseInt(data.total_denies);
-                document.getElementById('total-allows').innerText = data.total_allows;
-                document.getElementById('total-denies').innerText = data.total_denies;
-                document.getElementById('deny-rate').innerText = total > 0 ? ((data.total_denies / total) * 100).toFixed(2) : '0';
+                const allows = parseInt(data.total_allows) || 0;
+                const denies = parseInt(data.total_denies) || 0;
+                const total = allows + denies;
 
-                document.getElementById('top-keys-body').innerHTML = data.top_keys.map(k => 
-                    `<tr><td>${k.key}</td><td>${k.requests}</td></tr>`
+                document.getElementById('total-allows').innerText = allows.toLocaleString();
+                document.getElementById('total-denies').innerText = denies.toLocaleString();
+                document.getElementById('deny-rate').innerText = total > 0 ? ((denies / total) * 100).toFixed(1) + '%' : '0.0%';
+
+                if (chartInstance) {
+                    chartInstance.data.datasets[0].data = [allows || 1, denies]; 
+                    chartInstance.update();
+                }
+
+                document.getElementById('top-keys-body').innerHTML = data.top_keys.slice(0, 5).map(k => 
+                    `<tr><td style="font-family:monospace;">${k.key}</td><td>${k.requests}</td></tr>`
                 ).join('');
 
-                document.getElementById('rules-body').innerHTML = data.rules.map(r => 
-                    `<tr><td>${r.rule_name}</td><td>${r.checks}</td><td>${r.allows}</td><td>${r.denies}</td></tr>`
-                ).join('');
-
-                document.getElementById('events-body').innerHTML = data.events.map(e => 
+                document.getElementById('events-body').innerHTML = data.events.slice(0, 10).map(e => 
                     `<tr>
-                        <td>${new Date(e.wall_ts).toLocaleTimeString()}</td>
-                        <td>${e.lamport_ts}</td>
-                        <td class="${e.decision === 'allow' ? 'allow' : 'deny'}">${e.decision.toUpperCase()}</td>
+                        <td style="color:var(--text-muted); font-size:0.85rem;">${new Date(e.wall_ts).toLocaleTimeString()}</td>
+                        <td><span class="${e.decision === 'allow' ? 'tag-allow' : 'tag-deny'}">${e.decision.toUpperCase()}</span></td>
                         <td>${e.rule_name}</td>
-                        <td>${e.client_key}</td>
-                        <td>${e.node_id}</td>
+                        <td style="font-family:monospace;">${e.client_key}</td>
+                        <td style="color:var(--text-muted);">${e.node_id}</td>
                     </tr>`
                 ).join('');
 
@@ -97,8 +268,40 @@
             }
         }
 
+        async function createDemoRule() {
+            try {
+                await fetch('/rules', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: 'demo-rule', limit: 10, window: 60, strategy: 'sliding' })
+                });
+            } catch(e) {}
+        }
+        createDemoRule();
+
+        async function simulateRequest() {
+            const resBox = document.getElementById('simulator-result');
+            resBox.innerText = 'Sending...';
+            try {
+                const start = Date.now();
+                const response = await fetch('/demo/data');
+                const data = await response.json();
+                const ms = Date.now() - start;
+                
+                if (response.ok) {
+                    resBox.innerHTML = `<span style="color:var(--success)">200 OK (${ms}ms)</span><br>Response: ${data.data}`;
+                } else {
+                    resBox.innerHTML = `<span style="color:var(--danger)">429 Too Many Requests (${ms}ms)</span><br>Blocked! Retry after ${data.retry_after}s`;
+                }
+                fetchMetrics();
+            } catch (e) {
+                resBox.innerText = 'Error: ' + e.message;
+            }
+        }
+
+        initChart();
         fetchMetrics();
-        setInterval(fetchMetrics, 3000);
+        setInterval(fetchMetrics, 2000);
     </script>
 </body>
 </html>
