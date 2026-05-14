@@ -16,7 +16,7 @@ router.get('/health', (req, res) => {
 
 router.get('/metrics', async (req, res) => {
     try {
-        const leaderId = getLeaderId();
+        const leaderId = await redis.get('rg:leader') || 'Pending election...';
         
         const keys = await redis.keys('rg:stats:*:allows');
         const nodes = [];
