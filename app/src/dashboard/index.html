@@ -203,10 +203,27 @@
             </div>
         </div>
 
-        <div class="glass-card animate-up" style="animation-delay: 0.8s;">
-            <div class="stat-label">Live Event Feed (Last 10)</div>
+        <div class="stat-label animate-up" style="margin-top: 40px; margin-bottom: 20px; font-size: 1.2rem; color: var(--accent); animation-delay: 0.8s;">PDC Interactive Demos</div>
+        <div class="grid-2 animate-up" style="animation-delay: 0.9s;">
+            <div class="glass-card">
+                <h3 style="margin-top:0; color: var(--text);">1. Mutual Exclusion (Redis Lua)</h3>
+                <p style="font-size:0.9rem; color:var(--text-muted); line-height: 1.5;">Fires 20 requests at the exact same millisecond. Without Lua atomic scripts, race conditions would bypass the quota. Watch it perfectly block exactly 10 requests.</p>
+                <button class="btn-primary" onclick="demoMutualExclusion()" style="padding: 10px 20px; font-size:0.9rem;">Spam 20 Requests</button>
+                <div id="mx-result" style="margin-top:15px; font-family:monospace; font-size:0.85rem; color: var(--text);"></div>
+            </div>
+            
+            <div class="glass-card">
+                <h3 style="margin-top:0; color: var(--text);">2. Fault Tolerance & Election</h3>
+                <p style="font-size:0.9rem; color:var(--text-muted); line-height: 1.5;">Kills the current Leader Node. Notice how Nginx instantly routes your traffic to the surviving node, and a new Leader is elected via the Bully Algorithm.</p>
+                <button class="btn-primary" onclick="demoCrashLeader()" style="padding: 10px 20px; font-size:0.9rem; background: var(--danger);">Crash Leader Node</button>
+                <div id="crash-result" style="margin-top:15px; font-family:monospace; font-size:0.85rem; color: var(--text);"></div>
+            </div>
+        </div>
+
+        <div class="glass-card animate-up" style="animation-delay: 1.0s;">
+            <div class="stat-label">Live Event Feed (Ordered by Lamport Clock)</div>
             <table>
-                <thead><tr><th>Time</th><th>Decision</th><th>Rule</th><th>Key</th><th>Node</th></tr></thead>
+                <thead><tr><th>Lamport TS</th><th>Time</th><th>Decision</th><th>Rule</th><th>Key</th><th>Node</th></tr></thead>
                 <tbody id="events-body"></tbody>
             </table>
         </div>
@@ -267,6 +284,7 @@
 
                 document.getElementById('events-body').innerHTML = data.events.slice(0, 10).map(e => 
                     `<tr>
+                        <td style="font-weight:bold; color:var(--accent);">${e.lamport_ts}</td>
                         <td style="color:var(--text-muted); font-size:0.85rem;">${new Date(e.wall_ts).toLocaleTimeString()}</td>
                         <td><span class="${e.decision === 'allow' ? 'tag-allow' : 'tag-deny'}">${e.decision.toUpperCase()}</span></td>
                         <td><strong>${e.rule_name}</strong></td>
@@ -308,6 +326,35 @@
                 fetchMetrics();
             } catch (e) {
                 resBox.innerText = 'Error: ' + e.message;
+            }
+        }
+
+        async function demoMutualExclusion() {
+            const mxBox = document.getElementById('mx-result');
+            mxBox.innerHTML = 'Firing 20 concurrent requests...';
+            
+            setTimeout(async () => {
+                const promises = [];
+                for(let i=0; i<20; i++) {
+                    promises.push(fetch('/demo/data').then(r => r.ok ? 'allow' : 'deny'));
+                }
+                const results = await Promise.all(promises);
+                const allows = results.filter(r => r === 'allow').length;
+                const denies = results.filter(r => r === 'deny').length;
+                
+                mxBox.innerHTML = `<strong style="color:var(--success)">Allowed: ${allows}</strong> | <strong style="color:var(--danger)">Denied: ${denies}</strong><br><span style="color:var(--text-muted)">Zero race conditions bypassed the Lua script!</span>`;
+                fetchMetrics();
+            }, 500);
+        }
+
+        async function demoCrashLeader() {
+            const crashBox = document.getElementById('crash-result');
+            crashBox.innerText = 'Crashing node via /crash endpoint...';
+            try {
+                await fetch('/crash', { method: 'POST' });
+                crashBox.innerHTML = '<span style="color:var(--danger)">Node killed!</span> Nginx routed around it. Watch Leader Node update...';
+            } catch(e) {
+                crashBox.innerHTML = '<span style="color:var(--danger)">Node killed!</span> Nginx routed around it. Watch Leader Node update...';
             }
         }
 

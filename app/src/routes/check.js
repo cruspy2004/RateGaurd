@@ -27,6 +27,7 @@ router.post('/', async (req, res) => {
     }
 
     const decision = result.allowed ? 'allow' : 'deny';
+    const statName = result.allowed ? 'allows' : 'denies';
     const lamport_ts = clock.tick();
     const nodeId = process.env.NODE_ID || 'node-1';
 
@@ -35,7 +36,7 @@ router.post('/', async (req, res) => {
         [nodeId, ruleName, key, decision, result.remaining, lamport_ts])
     .catch(err => console.error('Error logging event:', err));
 
-    redis.incr(`rg:stats:${nodeId}:${decision}s`).catch(e => console.error(e));
+    redis.incr(`rg:stats:${nodeId}:${statName}`).catch(e => console.error(e));
 
     const latency = Date.now() - start;
     res.set('X-Node-ID', nodeId);
