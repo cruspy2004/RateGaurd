@@ -8,19 +8,20 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
-            --bg: #0f172a;
-            --surface: rgba(30, 41, 59, 0.7);
-            --surface-border: rgba(255, 255, 255, 0.1);
-            --text: #f8fafc;
-            --text-muted: #94a3b8;
-            --accent: #3b82f6;
+            --bg: #f8fafc;
+            --surface: #ffffff;
+            --surface-border: #e2e8f0;
+            --text: #1e293b;
+            --text-muted: #64748b;
+            --accent: #2563eb;
+            --accent-hover: #1d4ed8;
             --success: #10b981;
             --danger: #ef4444;
         }
 
         body {
             font-family: 'Inter', sans-serif;
-            background: linear-gradient(135deg, #0f172a, #1e1b4b);
+            background: var(--bg);
             color: var(--text);
             margin: 0;
             padding: 40px 20px;
@@ -43,26 +44,23 @@
         h1 {
             font-weight: 800;
             font-size: 2.5rem;
-            background: linear-gradient(to right, #38bdf8, #818cf8);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            color: var(--accent);
             margin: 0;
+            letter-spacing: -1px;
         }
 
         .glass-card {
             background: var(--surface);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
             border: 1px solid var(--surface-border);
-            border-radius: 16px;
+            border-radius: 20px;
             padding: 24px;
-            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
             transition: transform 0.3s ease, box-shadow 0.3s ease;
         }
 
         .glass-card:hover {
             transform: translateY(-5px);
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7);
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
         }
 
         .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; margin-bottom: 24px; }
@@ -72,6 +70,7 @@
             font-size: 3rem;
             font-weight: 800;
             margin: 10px 0;
+            color: var(--text);
         }
 
         .stat-label {
@@ -79,6 +78,7 @@
             font-size: 0.9rem;
             text-transform: uppercase;
             letter-spacing: 1px;
+            font-weight: 600;
         }
 
         .node-up { color: var(--success); font-weight: bold; }
@@ -88,41 +88,49 @@
         th, td { padding: 12px; text-align: left; border-bottom: 1px solid var(--surface-border); }
         th { color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase; }
         tbody tr { transition: background 0.2s; }
-        tbody tr:hover { background: rgba(255,255,255,0.05); }
+        tbody tr:hover { background: #f1f5f9; }
 
-        .tag-allow { background: rgba(16, 185, 129, 0.2); color: var(--success); padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
-        .tag-deny { background: rgba(239, 68, 68, 0.2); color: var(--danger); padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
+        .tag-allow { background: rgba(16, 185, 129, 0.15); color: var(--success); padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; }
+        .tag-deny { background: rgba(239, 68, 68, 0.15); color: var(--danger); padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; }
 
         .simulator-box {
-            background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(139, 92, 246, 0.2));
+            background: linear-gradient(135deg, #eff6ff, #dbeafe);
             text-align: center;
+            border: 1px solid #bfdbfe;
         }
 
         button.btn-primary {
-            background: linear-gradient(to right, #3b82f6, #8b5cf6);
+            background: var(--accent);
             color: white;
             border: none;
-            padding: 12px 24px;
-            font-size: 1rem;
+            padding: 14px 32px;
+            font-size: 1.05rem;
             font-weight: 600;
-            border-radius: 8px;
+            border-radius: 50px;
             cursor: pointer;
-            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
+            box-shadow: 0 6px 15px rgba(37, 99, 235, 0.2);
             transition: all 0.2s ease;
         }
 
         button.btn-primary:hover {
-            transform: scale(1.05);
-            box-shadow: 0 6px 20px rgba(59, 130, 246, 0.6);
+            background: var(--accent-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(37, 99, 235, 0.3);
+        }
+
+        button.btn-primary:active {
+            transform: translateY(1px);
         }
 
         #simulator-result {
-            margin-top: 15px;
+            margin-top: 20px;
             font-family: monospace;
-            background: rgba(0,0,0,0.3);
-            padding: 10px;
-            border-radius: 6px;
+            background: #ffffff;
+            padding: 15px;
+            border-radius: 12px;
             min-height: 40px;
+            border: 1px solid #bfdbfe;
+            color: var(--text);
         }
 
         @keyframes fadeInDown {
@@ -143,7 +151,7 @@
             <h1>RateGuard</h1>
             <div style="text-align: right;">
                 <div class="stat-label">Leader Node</div>
-                <div id="leader-id" style="font-weight: bold; color: var(--accent);">Connecting...</div>
+                <div id="leader-id" style="font-weight: bold; color: var(--accent); font-size: 1.2rem;">Connecting...</div>
             </div>
         </header>
 
@@ -165,13 +173,16 @@
         <div class="grid-2">
             <div class="glass-card animate-up" style="animation-delay: 0.4s;">
                 <div class="stat-label" style="margin-bottom: 15px;">Traffic Overview (Allow vs Deny)</div>
-                <canvas id="trafficChart" height="200"></canvas>
+                <!-- Fixed height wrapper prevents infinite growth -->
+                <div style="position: relative; height: 260px; width: 100%;">
+                    <canvas id="trafficChart"></canvas>
+                </div>
             </div>
             
             <div class="glass-card simulator-box animate-up" style="animation-delay: 0.5s;">
-                <div class="stat-label" style="margin-bottom: 15px; color: white;">API Simulator</div>
-                <p style="color: rgba(255,255,255,0.8); margin-bottom: 20px; font-size: 0.9rem;">
-                    Click to simulate a client hitting the `demo-rule` API rule (10 req/min). Spam it to see the rate limiter kick in!
+                <div class="stat-label" style="margin-bottom: 15px; color: var(--accent-hover);">API Simulator</div>
+                <p style="color: var(--text-muted); margin-bottom: 25px; font-size: 0.95rem;">
+                    Click to simulate a client hitting the API (10 req/min). Spam it to see the rate limiter block you!
                 </p>
                 <button class="btn-primary" onclick="simulateRequest()">Send API Request</button>
                 <div id="simulator-result">Awaiting input...</div>
@@ -181,7 +192,7 @@
         <div class="grid-2">
             <div class="glass-card animate-up" style="animation-delay: 0.6s;">
                 <div class="stat-label">System Health (Nodes)</div>
-                <div id="nodes-container" style="margin-top: 15px; line-height: 1.8;"></div>
+                <div id="nodes-container" style="margin-top: 15px; line-height: 2;"></div>
             </div>
             <div class="glass-card animate-up" style="animation-delay: 0.7s;">
                 <div class="stat-label">Top 10 Active Keys</div>
@@ -213,15 +224,16 @@
                     datasets: [{
                         data: [1, 0],
                         backgroundColor: ['#10b981', '#ef4444'],
-                        borderWidth: 0,
+                        borderWidth: 3,
+                        borderColor: '#ffffff',
                         hoverOffset: 4
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: { legend: { position: 'bottom', labels: { color: '#f8fafc' } } },
-                    cutout: '70%'
+                    plugins: { legend: { position: 'bottom', labels: { color: '#1e293b', font: { family: 'Inter', weight: '600' } } } },
+                    cutout: '75%'
                 }
             });
         }
@@ -233,7 +245,7 @@
                 
                 document.getElementById('leader-id').innerText = data.leader_id || 'Unknown';
                 document.getElementById('nodes-container').innerHTML = data.nodes.map(n => 
-                    `<div>Node ${n.id}: <span class="node-up">UP</span> <span style="color:#94a3b8; font-size:0.85rem; margin-left:10px;">(Allowed: ${n.allows} | Denied: ${n.denies})</span></div>`
+                    `<div><strong style="color:var(--text);">Node ${n.id}</strong>: <span class="node-up">UP</span> <span style="color:var(--text-muted); font-size:0.85rem; margin-left:10px;">(Allowed: ${n.allows} | Denied: ${n.denies})</span></div>`
                 ).join('');
 
                 const allows = parseInt(data.total_allows) || 0;
@@ -250,15 +262,15 @@
                 }
 
                 document.getElementById('top-keys-body').innerHTML = data.top_keys.slice(0, 5).map(k => 
-                    `<tr><td style="font-family:monospace;">${k.key}</td><td>${k.requests}</td></tr>`
+                    `<tr><td style="font-family:monospace; color:var(--accent);">${k.key}</td><td><strong style="color:var(--text);">${k.requests}</strong></td></tr>`
                 ).join('');
 
                 document.getElementById('events-body').innerHTML = data.events.slice(0, 10).map(e => 
                     `<tr>
                         <td style="color:var(--text-muted); font-size:0.85rem;">${new Date(e.wall_ts).toLocaleTimeString()}</td>
                         <td><span class="${e.decision === 'allow' ? 'tag-allow' : 'tag-deny'}">${e.decision.toUpperCase()}</span></td>
-                        <td>${e.rule_name}</td>
-                        <td style="font-family:monospace;">${e.client_key}</td>
+                        <td><strong>${e.rule_name}</strong></td>
+                        <td style="font-family:monospace; color:var(--accent);">${e.client_key}</td>
                         <td style="color:var(--text-muted);">${e.node_id}</td>
                     </tr>`
                 ).join('');
@@ -289,9 +301,9 @@
                 const ms = Date.now() - start;
                 
                 if (response.ok) {
-                    resBox.innerHTML = `<span style="color:var(--success)">200 OK (${ms}ms)</span><br>Response: ${data.data}`;
+                    resBox.innerHTML = `<strong style="color:var(--success)">200 OK (${ms}ms)</strong><br><span style="color:var(--text-muted)">Response: ${data.data}</span>`;
                 } else {
-                    resBox.innerHTML = `<span style="color:var(--danger)">429 Too Many Requests (${ms}ms)</span><br>Blocked! Retry after ${data.retry_after}s`;
+                    resBox.innerHTML = `<strong style="color:var(--danger)">429 Too Many Requests (${ms}ms)</strong><br><span style="color:var(--text-muted)">Blocked! Retry after ${data.retry_after}s</span>`;
                 }
                 fetchMetrics();
             } catch (e) {
